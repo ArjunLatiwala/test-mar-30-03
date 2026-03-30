@@ -81,8 +81,6 @@ jobs:
           GIT_SHA:                  ${{ github.sha }}
           GIT_BRANCH:               ${{ github.ref_name }}
           RUN_DATE:                 ${{ needs.prepare.outputs.run_date }}
-          SONAR_HOST_URL:           ${{ secrets.SONAR_HOST_URL }}
-          SONAR_TOKEN:              ${{ secrets.SONAR_TOKEN }}
           DEFECTDOJO_URL:           ${{ secrets.DEFECTDOJO_URL }}
           DEFECTDOJO_API_KEY:       ${{ secrets.DEFECTDOJO_API_KEY }}
           DEFECTDOJO_ENGAGEMENT_ID: ${{ secrets.DEFECTDOJO_ENGAGEMENT_ID }}
