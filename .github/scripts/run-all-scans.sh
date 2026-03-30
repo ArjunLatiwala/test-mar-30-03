@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # run-all-scans.sh
-# Scans: SonarQube SAST + OWASP Dependency-Check SCA
+# Scans: SonarQube SAST
 # Output: Imported to DefectDojo → final report as GitHub artifact
 # =============================================================================
 
@@ -9,15 +9,15 @@ set -euo pipefail
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 WORKSPACE="${HOME}/security-scan"
-APP_DIR="${WORKSPACE}/app/backend"
+APP_DIR="${WORKSPACE}/app"          # Scan entire repo root
 REPORTS_DIR="${WORKSPACE}/reports"
 LOG_FILE="${REPORTS_DIR}/scan.log"
 
 # ── State ────────────────────────────────────────────────────────────────────
 SONAR_RESULT="skipped"
-DEPCHECK_RESULT="skipped"
 IMPORT_COUNT=0
 FINAL_FORMAT="none"
+DOJO_IMPORT_FAILED=false
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 mkdir -p "${REPORTS_DIR}"
@@ -58,10 +58,20 @@ ok "All required env vars present"
 command -v docker &>/dev/null || { fail "Docker not found"; exit 1; }
 ok "Docker: $(docker --version | cut -d' ' -f3 | tr -d ',')"
 
+# ── Verify APP_DIR exists ────────────────────────────────────────────────────
+if [ ! -d "${APP_DIR}" ]; then
+  fail "APP_DIR not found: ${APP_DIR}"
+  exit 1
+fi
+ok "Scanning directory: ${APP_DIR}"
+log "Contents of scan root:"
+ls -la "${APP_DIR}" | head -30
+
 # ── Fix permissions upfront ──────────────────────────────────────────────────
 chmod -R 777 "${REPORTS_DIR}" 2>/dev/null || true
 ok "Permissions set on reports directory"
 
+# ── Check DefectDojo ─────────────────────────────────────────────────────────
 log "Checking DefectDojo at ${DEFECTDOJO_URL} ..."
 DOJO_OK=false
 for attempt in 1 2 3; do
@@ -109,34 +119,45 @@ log "-------------------------------------------------------"
 if [ "${SONAR_REACHABLE}" = "true" ]; then
   cd "${APP_DIR}"
 
-  # --- Auto-generate Project Key from Project Name ---
+  # --- Derive Project Key ---
+  PKG_JSON=""
   if [ -f "package.json" ]; then
-    log "Extracting project name from package.json..."
-    PROJECT_NAME=$(grep -m 1 '"name":' package.json | cut -d'"' -f4 || echo "unknown-project")
-    # Generate key: lowercase, replace non-alphanumeric (except . - _ :) with -
-    SONAR_PROJECT_KEY=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._:-]/-/g')
+    PKG_JSON="package.json"
+  else
+    PKG_JSON=$(find . -maxdepth 2 -name "package.json" \
+      ! -path "*/node_modules/*" | head -1 || true)
+  fi
+
+  if [ -n "${PKG_JSON}" ]; then
+    log "Found package.json at: ${PKG_JSON}"
+    PROJECT_NAME=$(grep -m 1 '"name":' "${PKG_JSON}" | cut -d'"' -f4 || echo "unknown-project")
+    SONAR_PROJECT_KEY=$(echo "${PROJECT_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._:-]/-/g')
     ok "Derived SonarQube project key: ${SONAR_PROJECT_KEY}"
   else
-    warn "package.json not found in ${APP_DIR}, falling back to manual or default key"
-    SONAR_PROJECT_KEY="${SONAR_PROJECT_KEY:-default-project-key}"
+    warn "No package.json found — using repository name as project key"
+    REPO_NAME=$(basename "${APP_DIR}")
+    SONAR_PROJECT_KEY=$(echo "${REPO_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._:-]/-/g')
     PROJECT_NAME="${SONAR_PROJECT_KEY}"
+    ok "Using project key: ${SONAR_PROJECT_KEY}"
   fi
 
   # --- Ensure SonarQube Project Exists ---
   log "Checking if project '${SONAR_PROJECT_KEY}' exists in SonarQube..."
-  PROJECT_EXISTS=$(curl -s -u "${SONAR_TOKEN}:" "${SONAR_HOST_URL}/api/projects/search?projects=${SONAR_PROJECT_KEY}" | grep -q "\"key\":\"${SONAR_PROJECT_KEY}\"" && echo "true" || echo "false")
+  PROJECT_EXISTS=$(curl -s -u "${SONAR_TOKEN}:" \
+    "${SONAR_HOST_URL}/api/projects/search?projects=${SONAR_PROJECT_KEY}" \
+    | grep -q "\"key\":\"${SONAR_PROJECT_KEY}\"" && echo "true" || echo "false")
 
   if [ "${PROJECT_EXISTS}" = "false" ]; then
-    log "Project not found. Creating project '${SONAR_PROJECT_KEY}' (Name: ${PROJECT_NAME})..."
-    CREATE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "${SONAR_TOKEN}:" -X POST \
+    log "Project not found. Creating '${SONAR_PROJECT_KEY}' (Name: ${PROJECT_NAME})..."
+    CREATE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+      -u "${SONAR_TOKEN}:" -X POST \
       "${SONAR_HOST_URL}/api/projects/create" \
       -d "name=${PROJECT_NAME}" \
       -d "project=${SONAR_PROJECT_KEY}")
-
     if [ "${CREATE_STATUS}" = "200" ] || [ "${CREATE_STATUS}" = "201" ]; then
-      ok "Project created successfully (HTTP ${CREATE_STATUS})"
+      ok "Project created (HTTP ${CREATE_STATUS})"
     else
-      warn "Failed to create project (HTTP ${CREATE_STATUS}). Attempting scan anyway..."
+      warn "Failed to create project (HTTP ${CREATE_STATUS}) — attempting scan anyway..."
     fi
   else
     ok "Project '${SONAR_PROJECT_KEY}' already exists"
@@ -164,7 +185,7 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
       -Dsonar.host.url="${SONAR_HOST_URL}" \
       -Dsonar.token="${SONAR_TOKEN}" \
       -Dsonar.sources=/usr/src \
-      -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/build/**,**/coverage/**" \
+      -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/build/**,**/coverage/**,**/.git/**" \
       -Dsonar.sourceEncoding=UTF-8 \
       2>&1 && SONAR_OK=true || SONAR_OK=false
   fi
@@ -173,12 +194,12 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
     log "Waiting 30s for SonarQube to process analysis..."
     sleep 30
 
-    log "Waiting for SonarQube background task to finish..."
+    log "Polling SonarQube background task..."
     for i in $(seq 1 12); do
       STATUS=$(curl -s -u "${SONAR_TOKEN}:" \
         "${SONAR_HOST_URL}/api/ce/component?component=${SONAR_PROJECT_KEY}" \
         | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "UNKNOWN")
-      log "  SonarQube task status: ${STATUS} (attempt ${i}/12)"
+      log "  Task status: ${STATUS} (attempt ${i}/12)"
       [ "${STATUS}" = "SUCCESS" ] && break
       [ "${STATUS}" = "FAILED" ] && { warn "SonarQube background task FAILED"; break; }
       sleep 10
@@ -194,25 +215,23 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
       ok "SonarQube report saved (${SIZE} bytes)"
       SONAR_RESULT="passed"
     else
-      warn "SonarQube report too small (${SIZE} bytes) — likely empty or error response"
-      warn "Raw content: $(cat ${REPORTS_DIR}/sonarqube-report.json 2>/dev/null || echo 'unreadable')"
+      warn "SonarQube report too small (${SIZE} bytes) — likely empty or error"
+      warn "Raw: $(cat "${REPORTS_DIR}/sonarqube-report.json" 2>/dev/null || echo 'unreadable')"
       SONAR_RESULT="partial"
     fi
   else
-    warn "SonarQube scan failed — continuing with Dependency-Check"
+    warn "SonarQube scan failed"
     SONAR_RESULT="failed"
   fi
 else
   warn "Skipping SonarQube — not reachable"
 fi
 
-
-
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 — Import to DefectDojo
+# STEP 2 — Import to DefectDojo
 # ─────────────────────────────────────────────────────────────────────────────
 log "-------------------------------------------------------"
-log "STEP 3: Importing to DefectDojo"
+log "STEP 2: Importing to DefectDojo"
 log "-------------------------------------------------------"
 
 do_import() {
@@ -221,7 +240,7 @@ do_import() {
     warn "Skipping ${LABEL} — file not found: ${FILE}"
     return 1
   fi
-  log "Importing ${LABEL} ($(wc -c < ${FILE}) bytes)..."
+  log "Importing ${LABEL} ($(wc -c < "${FILE}") bytes)..."
   local RESPONSE HTTP_CODE BODY
   RESPONSE=$(curl -s -w "\n%{http_code}" \
     -X POST \
@@ -252,35 +271,29 @@ do_import \
   "SonarQube Scan" \
   "SonarQube" || true
 
-do_import \
-  "${REPORTS_DIR}/dependency-check-report.xml" \
-  "Dependency Check Scan" \
-  "Dependency-Check" || true
-
 if [ "${IMPORT_COUNT}" -eq 0 ]; then
-  warn "All DefectDojo imports failed — pipeline will continue and bundle raw reports"
+  warn "DefectDojo import failed — pipeline will continue and bundle raw reports"
   warn "Check:"
-  warn "  1. DEFECTDOJO_API_KEY — must be just the key value, no 'Token ' prefix"
+  warn "  1. DEFECTDOJO_API_KEY — must be the key value only (no 'Token ' prefix)"
   warn "  2. DEFECTDOJO_ENGAGEMENT_ID — must be a valid numeric ID"
-  warn "  3. DEFECTDOJO_URL — must be http://localhost:8080"
+  warn "  3. DEFECTDOJO_URL — e.g. http://your-host:8080"
   DOJO_IMPORT_FAILED=true
 else
-  ok "${IMPORT_COUNT}/2 reports imported to DefectDojo"
+  ok "${IMPORT_COUNT}/1 reports imported to DefectDojo"
   DOJO_IMPORT_FAILED=false
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 4 — Generate final report from DefectDojo (or bundle raw reports)
+# STEP 3 — Generate final report from DefectDojo (or bundle raw reports)
 # ─────────────────────────────────────────────────────────────────────────────
 log "-------------------------------------------------------"
-log "STEP 4: Generating final report"
+log "STEP 3: Generating final report"
 log "-------------------------------------------------------"
 
 if [ "${DOJO_IMPORT_FAILED}" = "true" ]; then
   warn "DefectDojo unavailable — bundling raw scan reports as final output"
 
   SONAR_SIZE=$(wc -c < "${REPORTS_DIR}/sonarqube-report.json" 2>/dev/null || echo 0)
-  DEPCHECK_SIZE=$(wc -c < "${REPORTS_DIR}/dependency-check-report.xml" 2>/dev/null || echo 0)
 
   cat > "${REPORTS_DIR}/final-report.json" <<EOF
 {
@@ -289,12 +302,10 @@ if [ "${DOJO_IMPORT_FAILED}" = "true" ]; then
     "branch": "${GIT_BRANCH}",
     "date": "${RUN_DATE}",
     "sonarqube_result": "${SONAR_RESULT}",
-    "dependency_check_result": "${DEPCHECK_RESULT}",
     "defectdojo_import": "failed",
     "note": "DefectDojo import failed. Raw reports are included in this artifact.",
     "raw_reports": {
-      "sonarqube_report": "sonarqube-report.json (${SONAR_SIZE} bytes)",
-      "dependency_check_report": "dependency-check-report.xml (${DEPCHECK_SIZE} bytes)"
+      "sonarqube_report_bytes": ${SONAR_SIZE}
     }
   }
 }
@@ -317,7 +328,7 @@ else
     ok "DefectDojo findings report generated (${SIZE} bytes)"
     FINAL_FORMAT="json"
   else
-    warn "DefectDojo report fetch failed (HTTP ${HTTP}, ${SIZE} bytes) — falling back to raw reports bundle"
+    warn "DefectDojo report fetch failed (HTTP ${HTTP}, ${SIZE} bytes) — falling back to raw bundle"
     cat > "${REPORTS_DIR}/final-report.json" <<EOF
 {
   "scan_summary": {
@@ -325,7 +336,6 @@ else
     "branch": "${GIT_BRANCH}",
     "date": "${RUN_DATE}",
     "sonarqube_result": "${SONAR_RESULT}",
-    "dependency_check_result": "${DEPCHECK_RESULT}",
     "defectdojo_import": "imported_but_report_fetch_failed",
     "note": "Raw reports are included in this artifact."
   }
@@ -336,6 +346,10 @@ EOF
   fi
 fi
 
+log ""
+log "Reports directory contents:"
+ls -lh "${REPORTS_DIR}" || true
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SUMMARY
 # ─────────────────────────────────────────────────────────────────────────────
@@ -345,8 +359,7 @@ log " SCAN COMPLETE"
 log " SHA: ${GIT_SHA:0:8}  Branch: ${GIT_BRANCH}"
 log "-------------------------------------------------------"
 log " SonarQube SAST:     ${SONAR_RESULT}"
-log " Dependency-Check:   ${DEPCHECK_RESULT}"
-log " DefectDojo imports: ${IMPORT_COUNT}/2"
+log " DefectDojo imports: ${IMPORT_COUNT}/1"
 log " Report format:      ${FINAL_FORMAT}"
 log " Report:             ${REPORTS_DIR}/final-report.${FINAL_FORMAT}"
 log "======================================================="
