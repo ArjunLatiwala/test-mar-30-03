@@ -54,6 +54,15 @@ if [ ${#MISSING[@]} -gt 0 ]; then
 fi
 ok "All required env vars present"
 
+# ── Clean Secrets (Strip Newlines & Whitespace) ──────────────────────────────
+log "Trimming whitespace and newlines from secrets..."
+SONAR_TOKEN=$(echo "${SONAR_TOKEN}" | tr -d '\r\n ')
+SONAR_HOST_URL=$(echo "${SONAR_HOST_URL}" | tr -d '\r\n ')
+DEFECTDOJO_URL=$(echo "${DEFECTDOJO_URL}" | tr -d '\r\n ')
+DEFECTDOJO_API_KEY=$(echo "${DEFECTDOJO_API_KEY}" | tr -d '\r\n ')
+DEFECTDOJO_ENGAGEMENT_ID=$(echo "${DEFECTDOJO_ENGAGEMENT_ID}" | tr -d '\r\n ')
+DEFECTDOJO_PRODUCT_ID=$(echo "${DEFECTDOJO_PRODUCT_ID}" | tr -d '\r\n ')
+
 # ── Normalize URLs ───────────────────────────────────────────────────────────
 if [[ ! "${SONAR_HOST_URL}" =~ ^https?:// ]]; then
   log "Normalizing SONAR_HOST_URL to include http://"
