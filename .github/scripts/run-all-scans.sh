@@ -40,6 +40,7 @@ log "======================================================="
 
 REQUIRED=(
   GIT_SHA GIT_BRANCH RUN_DATE
+  SONAR_HOST_URL SONAR_TOKEN
   DEFECTDOJO_URL DEFECTDOJO_API_KEY
   DEFECTDOJO_ENGAGEMENT_ID DEFECTDOJO_PRODUCT_ID
 )
@@ -53,23 +54,10 @@ if [ ${#MISSING[@]} -gt 0 ]; then
 fi
 ok "All required env vars present"
 
-# ── Extract SonarQube Credentials from Config ────────────────────────────────
-log "Extracting Sonar credentials strictly from sonar-project.properties..."
-if [ -f "sonar-project.properties" ]; then
-  SONAR_HOST_URL=$(grep -i '^sonar\.host\.url=' sonar-project.properties | cut -d= -f2- | tr -d '\r\n ' || true)
-  SONAR_TOKEN=$(grep -i -E '^sonar\.token=|^sonar\.login=' sonar-project.properties | cut -d= -f2- | tr -d '\r\n ' || true)
-else
-  warn "No sonar-project.properties file found!"
-fi
-
-if [ -z "${SONAR_HOST_URL}" ] || [ -z "${SONAR_TOKEN}" ]; then
-  fail "SonarQube credentials missing! 'sonar.host.url' and 'sonar.token' must be placed in sonar-project.properties."
-  exit 1
-fi
-ok "Successfully loaded SonarQube credentials from configuration."
-
 # ── Clean Secrets (Strip Newlines & Whitespace) ──────────────────────────────
-log "Trimming whitespace and newlines from DefectDojo secrets..."
+log "Trimming whitespace and newlines from secrets..."
+SONAR_TOKEN=$(echo "${SONAR_TOKEN}" | tr -d '\r\n ')
+SONAR_HOST_URL=$(echo "${SONAR_HOST_URL}" | tr -d '\r\n ')
 DEFECTDOJO_URL=$(echo "${DEFECTDOJO_URL}" | tr -d '\r\n ')
 DEFECTDOJO_API_KEY=$(echo "${DEFECTDOJO_API_KEY}" | tr -d '\r\n ')
 DEFECTDOJO_ENGAGEMENT_ID=$(echo "${DEFECTDOJO_ENGAGEMENT_ID}" | tr -d '\r\n ')
@@ -241,6 +229,29 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
       sleep 10
     done
 
+    QG_FAILED=false
+    if [ "${STATUS}" = "SUCCESS" ]; then
+      log "Checking SonarQube Quality Gate status..."
+      # Give Elasticsearch/Quality Gate engine a few seconds to finalize
+      sleep 5 
+      QG_RESP=$(curl -s -u "${SONAR_TOKEN}:" \
+        "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${SONAR_PROJECT_KEY}")
+      QG_STATUS=$(echo "${QG_RESP}" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "UNKNOWN")
+      
+      if [ "${QG_STATUS}" = "OK" ]; then
+        ok "Quality Gate Passed (Status: ${QG_STATUS})"
+        SONAR_RESULT="passed"
+      else
+        warn "Quality Gate FAILED (Status: ${QG_STATUS})"
+        log "  Raw Quality Gate API Response: ${QG_RESP}"
+        SONAR_RESULT="failed (quality gate)"
+        QG_FAILED=true
+      fi
+    else
+      warn "SonarQube background task did not reach SUCCESS. Status: ${STATUS}"
+      SONAR_RESULT="failed (task incomplete)"
+    fi
+
     curl -s \
       -u "${SONAR_TOKEN}:" \
       "${SONAR_HOST_URL}/api/issues/search?componentKeys=${SONAR_PROJECT_KEY}&resolved=false&ps=500" \
@@ -249,7 +260,7 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
 
     if [ "${SIZE}" -gt 500 ]; then
       ok "SonarQube report saved (${SIZE} bytes)"
-      SONAR_RESULT="passed"
+      [ "${QG_FAILED}" != "true" ] && SONAR_RESULT="passed"
     else
       warn "SonarQube report too small (${SIZE} bytes) — likely empty or error"
       warn "Raw: $(cat "${REPORTS_DIR}/sonarqube-report.json" 2>/dev/null || echo 'unreadable')"
@@ -418,3 +429,10 @@ log " Report format:      ${FINAL_FORMAT}"
 log " Report:             ${REPORTS_DIR}/final-report.${FINAL_FORMAT}"
 log "======================================================="
 ok "Done. Report will be uploaded as GitHub artifact."
+
+if [ "${QG_FAILED}" = "true" ]; then
+  log ""
+  fail "TERMINAL ERROR: SonarQube Quality Gate Failed"
+  fail "The pipeline is blocked from passing because security/quality conditions were not met."
+  exit 1
+fi
