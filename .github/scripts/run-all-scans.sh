@@ -54,6 +54,17 @@ if [ ${#MISSING[@]} -gt 0 ]; then
 fi
 ok "All required env vars present"
 
+# ── Normalize URLs ───────────────────────────────────────────────────────────
+if [[ ! "${SONAR_HOST_URL}" =~ ^https?:// ]]; then
+  log "Normalizing SONAR_HOST_URL to include http://"
+  SONAR_HOST_URL="http://${SONAR_HOST_URL}"
+fi
+
+if [[ ! "${DEFECTDOJO_URL}" =~ ^https?:// ]]; then
+  log "Normalizing DEFECTDOJO_URL to include http://"
+  DEFECTDOJO_URL="http://${DEFECTDOJO_URL}"
+fi
+
 # ── Check environment ────────────────────────────────────────────────────────
 command -v docker &>/dev/null || { fail "Docker not found"; exit 1; }
 ok "Docker: $(docker --version | cut -d' ' -f3 | tr -d ',')"
