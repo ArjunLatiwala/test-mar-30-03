@@ -70,6 +70,8 @@ jobs:
           cp -r . ~/security-scan/app/
           cp .github/scripts/run-all-scans.sh \
              ~/security-scan/scripts/run-all-scans.sh
+          cp .github/scripts/generate-html.js \
+             ~/security-scan/scripts/generate-html.js 2>/dev/null || true
           chmod +x ~/security-scan/scripts/run-all-scans.sh
           echo "✓ Workspace contents:"
           ls -la ~/security-scan/app/
@@ -121,19 +123,21 @@ jobs:
           echo "Reports available:"
           ls -lh ~/security-scan/reports/ 2>/dev/null || echo "No reports directory found"
 
-      - name: Find and rename final report
+      - name: Rename final reports
         id: find
         run: |
-          REPORT=$(ls ~/security-scan/reports/final-report.* 2>/dev/null | head -1)
-          if [ -n "${REPORT}" ]; then
+          FOUND="none"
+          for REPORT in ~/security-scan/reports/final-report.*; do
+            [ -e "$REPORT" ] || continue
             EXT="${REPORT##*.}"
             DEST=~/security-scan/reports/${{ needs.prepare.outputs.report_name }}.${EXT}
             cp "${REPORT}" "${DEST}"
-            echo "report_file=${{ needs.prepare.outputs.report_name }}.${EXT}" >> $GITHUB_OUTPUT
-            echo "✓ Final report ready: ${DEST}"
-          else
-            echo "⚠ No final report found — uploading all raw reports as-is"
-            echo "report_file=none" >> $GITHUB_OUTPUT
+            echo "✓ Report ready: ${DEST}"
+            FOUND="found"
+          done
+          echo "report_file=${{ needs.prepare.outputs.report_name }}" >> $GITHUB_OUTPUT
+          if [ "$FOUND" = "none" ]; then
+            echo "⚠ No final reports found — uploading all raw reports as-is"
           fi
 
       - name: Upload as GitHub artifact

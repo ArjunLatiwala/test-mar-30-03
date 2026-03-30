@@ -370,6 +370,24 @@ EOF
   fi
 fi
 
+log "-------------------------------------------------------"
+log "STEP 4: Generating HTML Report"
+log "-------------------------------------------------------"
+if command -v node &>/dev/null; then
+  if [ -f "${WORKSPACE}/scripts/generate-html.js" ] && [ -f "${REPORTS_DIR}/final-report.json" ]; then
+    node "${WORKSPACE}/scripts/generate-html.js" "${REPORTS_DIR}/final-report.json" "${REPORTS_DIR}/final-report.html"
+    if [ -f "${REPORTS_DIR}/final-report.html" ]; then
+      FINAL_FORMAT="json + html"
+    else
+      warn "Failed to generate HTML report."
+    fi
+  else
+    warn "Missing final-report.json or generate-html.js script. Skipping HTML generation."
+  fi
+else
+  warn "Node.js not installed on runner. Skipping HTML generation."
+fi
+
 log ""
 log "Reports directory contents:"
 ls -lh "${REPORTS_DIR}" || true
