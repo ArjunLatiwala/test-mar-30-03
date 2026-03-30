@@ -207,9 +207,13 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
 
     log "Polling SonarQube background task..."
     for i in $(seq 1 12); do
-      STATUS=$(curl -s -u "${SONAR_TOKEN}:" \
-        "${SONAR_HOST_URL}/api/ce/component?component=${SONAR_PROJECT_KEY}" \
-        | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "UNKNOWN")
+      RAW_RESP=$(curl -s -u "${SONAR_TOKEN}:" \
+        "${SONAR_HOST_URL}/api/ce/component?component=${SONAR_PROJECT_KEY}")
+      STATUS=$(echo "${RAW_RESP}" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
+      if [ -z "${STATUS}" ]; then
+        STATUS="UNKNOWN"
+        log "  Raw API response: ${RAW_RESP}"
+      fi
       log "  Task status: ${STATUS} (attempt ${i}/12)"
       [ "${STATUS}" = "SUCCESS" ] && break
       [ "${STATUS}" = "FAILED" ] && { warn "SonarQube background task FAILED"; break; }
