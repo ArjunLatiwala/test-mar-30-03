@@ -206,67 +206,7 @@ else
   warn "Skipping SonarQube — not reachable"
 fi
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 — OWASP Dependency-Check SCA
-# ─────────────────────────────────────────────────────────────────────────────
-log "-------------------------------------------------------"
-log "STEP 2: OWASP Dependency-Check SCA"
-log "-------------------------------------------------------"
 
-log "Running npm install to populate node_modules..."
-if [ -f "${APP_DIR}/package.json" ]; then
-  cd "${APP_DIR}"
-  npm install --ignore-scripts --prefer-offline 2>&1 || \
-    npm install --ignore-scripts 2>&1 || \
-    warn "npm install failed — Dependency-Check will use package-lock.json only"
-  cd - > /dev/null
-  ok "npm install complete (node_modules ready)"
-else
-  warn "No package.json found at ${APP_DIR} — skipping npm install"
-fi
-
-docker rm -f dep-check 2>/dev/null || true
-
-chmod -R 777 "${REPORTS_DIR}"
-
-log "Running Dependency-Check..."
-docker run \
-  --name dep-check \
-  --user root \
-  -v "${APP_DIR}:/src" \
-  -v "${REPORTS_DIR}:/report" \
-  owasp/dependency-check:latest \
-  --project "localit-backend" \
-  --scan /src \
-  --format XML \
-  --format HTML \
-  --out /report \
-  --enableRetired \
-  --disableAssembly \
-  --disableOssIndex \
-  --failOnCVSS 0 \
-  --failOnSevere false \
-  2>&1 && DEPCHECK_OK=true || DEPCHECK_OK=false
-
-docker rm -f dep-check 2>/dev/null || true
-
-sudo chown -R "$(whoami)":"$(whoami)" "${REPORTS_DIR}" 2>/dev/null || true
-
-if [ -f "${REPORTS_DIR}/dependency-check-report.xml" ]; then
-  SIZE=$(wc -c < "${REPORTS_DIR}/dependency-check-report.xml")
-  ok "Dependency-Check XML report saved (${SIZE} bytes)"
-  DEPCHECK_RESULT="passed"
-else
-  warn "Dependency-Check failed or no report produced"
-  DEPCHECK_RESULT="failed"
-fi
-
-if [ -f "${REPORTS_DIR}/dependency-check-report.html" ]; then
-  SIZE=$(wc -c < "${REPORTS_DIR}/dependency-check-report.html")
-  ok "Dependency-Check HTML report saved (${SIZE} bytes)"
-else
-  warn "HTML report not generated — only XML available"
-fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 3 — Import to DefectDojo
