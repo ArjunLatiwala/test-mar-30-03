@@ -292,7 +292,7 @@ fi
 log "-------------------------------------------------------"
 log "STEP 2: Unit Testing"
 log "-------------------------------------------------------"
-if npm test > /dev/null 2>&1; then
+if npm test; then
   ok "Unit tests passed"
   UNIT_RESULT="passed"
 else
@@ -325,7 +325,7 @@ done
 if [ "${APP_READY}" = "true" ]; then
   ok "Application is ready. Running Newman tests..."
   if [ -n "${POSTMAN_API_KEY:-}" ] && [ -n "${COLLECTION_UID:-}" ]; then
-    if npm run test:newman > /dev/null 2>&1; then
+    if npm run test:newman; then
       ok "Newman tests passed"
       NEWMAN_RESULT="passed"
     else
