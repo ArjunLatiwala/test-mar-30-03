@@ -190,7 +190,7 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
     sonar-scanner \
       -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
       -Dsonar.host.url="${SONAR_HOST_URL}" \
-      -Dsonar.token="${SONAR_TOKEN}" \
+      -Dsonar.login="${SONAR_TOKEN}" \
       -Dsonar.sources=. \
       -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/build/**,**/coverage/**,**/tests/**,**/seeds/**,**/scripts/**,**/.git/**" \
       -Dsonar.sourceEncoding=UTF-8 \
@@ -203,7 +203,7 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
       sonarsource/sonar-scanner-cli:latest \
       -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
       -Dsonar.host.url="${SONAR_HOST_URL}" \
-      -Dsonar.token="${SONAR_TOKEN}" \
+      -Dsonar.login="${SONAR_TOKEN}" \
       -Dsonar.sources=/usr/src \
       -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/build/**,**/coverage/**,**/.git/**" \
       -Dsonar.sourceEncoding=UTF-8 \
