@@ -12,6 +12,29 @@ try {
   const rawData = fs.readFileSync(jsonPath, 'utf8');
   const data = JSON.parse(rawData);
   
+  // ── Classify findings by source tool ──────────────────────────────────────
+  function classifyTool(finding) {
+    const title = (finding.title || '').toLowerCase();
+    const testType = (finding.test_type_name || finding.scan_type || '').toLowerCase();
+    const foundBy = (finding.found_by || []).map(f => (f.name || f || '').toString().toLowerCase()).join(' ');
+    const combined = `${title} ${testType} ${foundBy}`;
+
+    if (combined.includes('zap') || combined.includes('dast'))  return 'OWASP ZAP (DAST)';
+    if (combined.includes('sonar') || combined.includes('sast')) return 'SonarQube (SAST)';
+    // Heuristic: SonarQube titles typically follow "RuleId:Sxxxx_uuid" patterns
+    if (/^[a-z]+:s\d+/i.test(title)) return 'SonarQube (SAST)';
+    return 'Other';
+  }
+
+  // ── Severity color map ────────────────────────────────────────────────────
+  const sevColors = {
+    Critical: { bg: '#fee2e2', text: '#991b1b', card: '#ef4444' },
+    High:     { bg: '#fef08a', text: '#854d0e', card: '#f59e0b' },
+    Medium:   { bg: '#ffedd5', text: '#9a3412', card: '#f97316' },
+    Low:      { bg: '#dcfce7', text: '#166534', card: '#22c55e' },
+    Info:     { bg: '#e0f2fe', text: '#075985', card: '#3b82f6' },
+  };
+
   let html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -19,70 +42,192 @@ try {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pipeline Security Report</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f3f4f6; color: #111827; margin: 0; padding: 40px 20px; }
-        .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-        h1 { margin-top: 0; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; color: #1f2937; }
-        .badge { display: inline-block; padding: 6px 12px; font-weight: 600; font-size: 14px; border-radius: 6px; margin-bottom: 20px; background: #e0e7ff; color: #3730a3; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e5e7eb; }
-        th { background-color: #f9fafb; font-weight: 600; color: #4b5563; }
-        .sev-badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; }
-        .sev-Critical { background-color: #fee2e2; color: #991b1b; }
-        .sev-High { background-color: #fef08a; color: #854d0e; }
-        .sev-Medium { background-color: #ffedd5; color: #9a3412; }
-        .sev-Low { background-color: #dcfce7; color: #166534; }
-        .sev-Info { background-color: #e0f2fe; color: #075985; }
-        .pre-wrap { background: #f9fafb; padding: 15px; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 14px; }
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f0f2f5; color: #111827; margin: 0; padding: 40px 20px; }
+        .container { max-width: 1100px; margin: 0 auto; }
+        h1 { margin: 0 0 8px; color: #1f2937; font-size: 28px; }
+        .subtitle { color: #6b7280; margin-bottom: 24px; font-size: 14px; }
+
+        /* ── Summary Cards ─────────────────────────────────── */
+        .summary-grid { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
+        .summary-card { flex: 1; min-width: 100px; padding: 16px; border-radius: 10px; color: white; text-align: center; }
+        .summary-card .count { font-size: 32px; font-weight: 700; }
+        .summary-card .label { font-size: 12px; text-transform: uppercase; opacity: 0.9; margin-top: 2px; }
+
+        /* ── Tool Section ──────────────────────────────────── */
+        .tool-section { background: white; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 20px; overflow: hidden; }
+        .tool-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; cursor: pointer; user-select: none; border-bottom: 1px solid #e5e7eb; }
+        .tool-header:hover { background: #f9fafb; }
+        .tool-name { font-size: 18px; font-weight: 700; color: #1f2937; }
+        .tool-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+        .tool-badge.sast { background: #ede9fe; color: #5b21b6; }
+        .tool-badge.dast { background: #dbeafe; color: #1e40af; }
+        .tool-badge.other { background: #f3f4f6; color: #374151; }
+        .tool-count { font-size: 14px; color: #6b7280; }
+        .tool-body { padding: 0; }
+        .tool-body.collapsed { display: none; }
+
+        .sev-summary { display: flex; gap: 8px; padding: 12px 24px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; flex-wrap: wrap; }
+        .sev-pill { padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+
+        /* ── Table ─────────────────────────────────────────── */
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 12px 24px; border-bottom: 1px solid #f3f4f6; font-size: 14px; }
+        th { background-color: #f9fafb; font-weight: 600; color: #4b5563; position: sticky; top: 0; }
+        tr:hover { background: #f9fafb; }
+        .sev-badge { padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 12px; display: inline-block; }
+
+        /* ── Fallback ──────────────────────────────────────── */
+        .pre-wrap { background: #f9fafb; padding: 20px; border-radius: 8px; overflow-x: auto; font-family: monospace; font-size: 13px; }
+        .empty-state { text-align: center; color: #9ca3af; padding: 40px; }
+
+        /* ── Toggle Arrow ──────────────────────────────────── */
+        .arrow { transition: transform 0.2s ease; display: inline-block; margin-left: 8px; }
+        .arrow.open { transform: rotate(90deg); }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Pipeline Security Report</h1>`;
+        <h1>🛡️ Pipeline Security Report</h1>
+        <div class="subtitle">Generated by the CI/CD Security Pipeline</div>`;
 
   if (data.results && data.results.length > 0) {
-    html += `
-        <div class="badge">Total Findings: ${data.count || data.results.length}</div>
-        <table>
-            <thead>
-                <tr>
-                    <th>Severity</th>
-                    <th>Vulnerability Title</th>
-                    <th>Location / Component</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>`;
-            
-    data.results.forEach(finding => {
-      const sev = finding.severity || 'Info';
-      let location = finding.file_path ? finding.file_path + (finding.line ? ':' + finding.line : '') : finding.component_name;
-      location = location || 'N/A';
-      
-      html += `
-                <tr>
-                    <td><span class="sev-badge sev-${sev}">${sev}</span></td>
-                    <td>${finding.title || 'N/A'}</td>
-                    <td>${location}</td>
-                    <td>${finding.active ? 'Active' : 'Inactive'}</td>
-                </tr>`;
+    // ── Group findings by tool ────────────────────────────────────────────
+    const groups = {};
+    data.results.forEach(f => {
+      const tool = classifyTool(f);
+      if (!groups[tool]) groups[tool] = [];
+      groups[tool].push(f);
     });
-    
-    html += `
-            </tbody>
-        </table>`;
+
+    // ── Global severity counts ────────────────────────────────────────────
+    const globalSev = {};
+    data.results.forEach(f => {
+      const s = f.severity || 'Info';
+      globalSev[s] = (globalSev[s] || 0) + 1;
+    });
+
+    // ── Summary Cards ─────────────────────────────────────────────────────
+    html += `<div class="summary-grid">
+            <div class="summary-card" style="background: linear-gradient(135deg, #6366f1, #4f46e5);">
+                <div class="count">${data.results.length}</div>
+                <div class="label">Total Findings</div>
+            </div>`;
+    ['Critical', 'High', 'Medium', 'Low', 'Info'].forEach(sev => {
+      if (globalSev[sev]) {
+        const c = sevColors[sev] || sevColors.Info;
+        html += `
+            <div class="summary-card" style="background: ${c.card};">
+                <div class="count">${globalSev[sev]}</div>
+                <div class="label">${sev}</div>
+            </div>`;
+      }
+    });
+    html += `</div>`;
+
+    // ── Render each tool section ──────────────────────────────────────────
+    const toolOrder = ['SonarQube (SAST)', 'OWASP ZAP (DAST)', 'Other'];
+    let sectionId = 0;
+
+    toolOrder.forEach(toolName => {
+      const findings = groups[toolName];
+      if (!findings || findings.length === 0) return;
+
+      sectionId++;
+      const badgeClass = toolName.includes('SAST') ? 'sast' : toolName.includes('DAST') ? 'dast' : 'other';
+      const typeLabel = toolName.includes('SAST') ? 'Static Analysis' : toolName.includes('DAST') ? 'Dynamic Analysis' : 'Misc';
+
+      // Per-tool severity counts
+      const toolSev = {};
+      findings.forEach(f => {
+        const s = f.severity || 'Info';
+        toolSev[s] = (toolSev[s] || 0) + 1;
+      });
+
+      html += `
+        <div class="tool-section">
+            <div class="tool-header" onclick="toggleSection(${sectionId})">
+                <div>
+                    <span class="tool-name">${toolName}</span>
+                    <span class="tool-badge ${badgeClass}">${typeLabel}</span>
+                </div>
+                <div class="tool-count">${findings.length} finding${findings.length !== 1 ? 's' : ''} <span class="arrow open" id="arrow-${sectionId}">▶</span></div>
+            </div>
+            <div class="tool-body" id="section-${sectionId}">
+                <div class="sev-summary">`;
+
+      ['Critical', 'High', 'Medium', 'Low', 'Info'].forEach(sev => {
+        if (toolSev[sev]) {
+          const c = sevColors[sev] || sevColors.Info;
+          html += `<span class="sev-pill" style="background:${c.bg};color:${c.text};">${sev}: ${toolSev[sev]}</span>`;
+        }
+      });
+
+      html += `</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Severity</th>
+                            <th>Vulnerability</th>
+                            <th>Location</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+
+      // Sort by severity priority
+      const sevOrder = { Critical: 0, High: 1, Medium: 2, Low: 3, Info: 4 };
+      findings.sort((a, b) => (sevOrder[a.severity] || 5) - (sevOrder[b.severity] || 5));
+
+      findings.forEach(finding => {
+        const sev = finding.severity || 'Info';
+        const c = sevColors[sev] || sevColors.Info;
+        let location = finding.file_path
+          ? finding.file_path + (finding.line ? ':' + finding.line : '')
+          : finding.component_name;
+        location = location || 'N/A';
+
+        html += `
+                        <tr>
+                            <td><span class="sev-badge" style="background:${c.bg};color:${c.text};">${sev}</span></td>
+                            <td>${finding.title || 'N/A'}</td>
+                            <td><code>${location}</code></td>
+                            <td>${finding.active ? '🔴 Active' : '✅ Resolved'}</td>
+                        </tr>`;
+      });
+
+      html += `
+                    </tbody>
+                </table>
+            </div>
+        </div>`;
+    });
+
   } else if (data.scan_summary) {
     html += `
-        <div class="badge">Raw JSON Scan Summary</div>
-        <p>DefectDojo returned no findings or was unreachable. Below is the raw fallback summary:</p>
-        <div class="pre-wrap"><pre>${JSON.stringify(data.scan_summary, null, 2)}</pre></div>`;
+        <div class="tool-section">
+            <div class="tool-header"><span class="tool-name">Raw Scan Summary</span></div>
+            <div class="tool-body">
+                <div style="padding:24px;">
+                    <p>DefectDojo returned no findings or was unreachable. Below is the raw fallback summary:</p>
+                    <div class="pre-wrap"><pre>${JSON.stringify(data.scan_summary, null, 2)}</pre></div>
+                </div>
+            </div>
+        </div>`;
   } else {
-    html += `
-        <div class="badge">No findings</div>
-        <p>No valid DefectDojo findings or scan summary found in the report.</p>`;
+    html += `<div class="empty-state"><h2>No findings</h2><p>No valid DefectDojo findings or scan summary found in the report.</p></div>`;
   }
 
   html += `
     </div>
+    <script>
+        function toggleSection(id) {
+            const body = document.getElementById('section-' + id);
+            const arrow = document.getElementById('arrow-' + id);
+            body.classList.toggle('collapsed');
+            arrow.classList.toggle('open');
+        }
+    </script>
 </body>
 </html>`;
 
