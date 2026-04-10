@@ -298,12 +298,15 @@ done
 
 if [ "${APP_READY}" = "true" ]; then
   ok "Application is ready. Starting ZAP Baseline Scan..."
+  # Grant full permissions to REPORTS_DIR so the isolated Docker user 'zap' can write the file back
+  chmod 777 "${REPORTS_DIR}"
+  
   # Use || true so the script doesn't abort early if vulnerabilities are found
   docker run --rm --network=host \
     -v "${REPORTS_DIR}:/zap/wrk/:rw" \
     owasp/zap2docker-stable zap-baseline.py \
     -t http://localhost:3000 \
-    -J zap-report.json > /dev/null 2>&1 || true
+    -J zap-report.json || true
   
   if [ -f "${REPORTS_DIR}/zap-report.json" ]; then
     ZAP_SIZE=$(wc -c < "${REPORTS_DIR}/zap-report.json")
