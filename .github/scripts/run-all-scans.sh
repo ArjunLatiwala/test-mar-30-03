@@ -275,10 +275,63 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 — Import to DefectDojo
+# STEP 2 — OWASP ZAP DAST Scan
 # ─────────────────────────────────────────────────────────────────────────────
 log "-------------------------------------------------------"
-log "STEP 2: Importing to DefectDojo"
+log "STEP 2: OWASP ZAP DAST Scan"
+log "-------------------------------------------------------"
+log "Starting the backend application on port 3000..."
+cd "${APP_DIR}"
+npm ci --silent > /dev/null 2>&1 || true
+npm start > /dev/null 2>&1 &
+APP_PID=$!
+
+log "Waiting up to 30s for the application to be ready on http://localhost:3000..."
+APP_READY=false
+for i in $(seq 1 15); do
+  if curl -s http://localhost:3000 > /dev/null; then
+    APP_READY=true
+    break
+  fi
+  sleep 2
+done
+
+if [ "${APP_READY}" = "true" ]; then
+  ok "Application is ready. Starting ZAP Baseline Scan..."
+  # Use || true so the script doesn't abort early if vulnerabilities are found
+  docker run --rm --network=host \
+    -v "${REPORTS_DIR}:/zap/wrk/:rw" \
+    owasp/zap2docker-stable zap-baseline.py \
+    -t http://localhost:3000 \
+    -J zap-report.json > /dev/null 2>&1 || true
+  
+  if [ -f "${REPORTS_DIR}/zap-report.json" ]; then
+    ZAP_SIZE=$(wc -c < "${REPORTS_DIR}/zap-report.json")
+    if [ "${ZAP_SIZE}" -gt 100 ]; then
+      ok "ZAP Scan completed successfully (${ZAP_SIZE} bytes)."
+      ZAP_RESULT="completed"
+    else
+      warn "ZAP Scan completed but report is suspiciously small."
+      ZAP_RESULT="failed"
+    fi
+  else
+    warn "ZAP Scan failed to produce a report."
+    ZAP_RESULT="failed"
+  fi
+else
+  warn "Application failed to start. Skipping ZAP DAST scan."
+  ZAP_RESULT="skipped"
+fi
+
+log "Shutting down the backend application..."
+kill ${APP_PID} 2>/dev/null || true
+cd "${WORKSPACE}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 3 — Import to DefectDojo
+# ─────────────────────────────────────────────────────────────────────────────
+log "-------------------------------------------------------"
+log "STEP 3: Importing to DefectDojo"
 log "-------------------------------------------------------"
 
 do_import() {
@@ -318,6 +371,11 @@ do_import \
   "SonarQube Scan" \
   "SonarQube" || true
 
+do_import \
+  "${REPORTS_DIR}/zap-report.json" \
+  "ZAP Scan" \
+  "OWASP ZAP" || true
+
 if [ "${IMPORT_COUNT}" -eq 0 ]; then
   warn "DefectDojo import failed — pipeline will continue and bundle raw reports"
   warn "Check:"
@@ -326,15 +384,15 @@ if [ "${IMPORT_COUNT}" -eq 0 ]; then
   warn "  3. DEFECTDOJO_URL — e.g. http://your-host:8080"
   DOJO_IMPORT_FAILED=true
 else
-  ok "${IMPORT_COUNT}/1 reports imported to DefectDojo"
+  ok "${IMPORT_COUNT} reports imported to DefectDojo"
   DOJO_IMPORT_FAILED=false
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 — Generate final report from DefectDojo (or bundle raw reports)
+# STEP 4 — Generate final report from DefectDojo (or bundle raw reports)
 # ─────────────────────────────────────────────────────────────────────────────
 log "-------------------------------------------------------"
-log "STEP 3: Generating final report"
+log "STEP 4: Generating final report"
 log "-------------------------------------------------------"
 
 if [ "${DOJO_IMPORT_FAILED}" = "true" ]; then
@@ -352,7 +410,8 @@ if [ "${DOJO_IMPORT_FAILED}" = "true" ]; then
     "defectdojo_import": "failed",
     "note": "DefectDojo import failed. Raw reports are included in this artifact.",
     "raw_reports": {
-      "sonarqube_report_bytes": ${SONAR_SIZE}
+      "sonarqube_report_bytes": ${SONAR_SIZE},
+      "zap_report_bytes": $(wc -c < "${REPORTS_DIR}/zap-report.json" 2>/dev/null || echo 0)
     }
   }
 }
@@ -394,7 +453,7 @@ EOF
 fi
 
 log "-------------------------------------------------------"
-log "STEP 4: Generating HTML Report"
+log "STEP 5: Generating HTML Report"
 log "-------------------------------------------------------"
 if command -v node &>/dev/null; then
   if [ -f "${WORKSPACE}/scripts/generate-html.js" ] && [ -f "${REPORTS_DIR}/final-report.json" ]; then
@@ -423,8 +482,9 @@ log "======================================================="
 log " SCAN COMPLETE"
 log " SHA: ${GIT_SHA:0:8}  Branch: ${GIT_BRANCH}"
 log "-------------------------------------------------------"
-log " SonarQube SAST:     ${SONAR_RESULT}"
-log " DefectDojo imports: ${IMPORT_COUNT}/1"
+log " SonarQube SAST:     ${SONAR_RESULT:-skipped}"
+log " OWASP ZAP DAST:     ${ZAP_RESULT:-skipped}"
+log " DefectDojo imports: ${IMPORT_COUNT}"
 log " Report format:      ${FINAL_FORMAT}"
 log " Report:             ${REPORTS_DIR}/final-report.${FINAL_FORMAT}"
 log "======================================================="
