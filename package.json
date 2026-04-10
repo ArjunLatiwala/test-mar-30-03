@@ -18,8 +18,13 @@
   "devDependencies": {
     "cs-setup": "github:HUSAINTRIVEDI52/pkg#added",
     "eslint": "^8.56.0",
+    "husky": "^9.1.7",
     "jest": "^29.7.0",
     "sonarqube-scanner": "^4.3.5",
     "supertest": "^6.3.4"
+  },
+  "jest": {
+    "testPathIgnorePatterns": ["/node_modules/", "/backend/"],
+    "collectCoverageFrom": ["src/**/*.js", "!src/server.js"]
   }
 }
