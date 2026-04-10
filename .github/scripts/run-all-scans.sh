@@ -490,7 +490,7 @@ log " Report:             ${REPORTS_DIR}/final-report.${FINAL_FORMAT}"
 log "======================================================="
 ok "Done. Report will be uploaded as GitHub artifact."
 
-if [ "${QG_FAILED}" = "true" ]; then
+if [ "${QG_FAILED:-false}" = "true" ]; then
   log ""
   fail "TERMINAL ERROR: SonarQube Quality Gate Failed"
   fail "The pipeline is blocked from passing because security/quality conditions were not met."
