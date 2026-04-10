@@ -151,40 +151,17 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
   else
     ok "Project '${SONAR_PROJECT_KEY}' already exists"
   fi
-  # --- Run tests with coverage before scanning ---
-  log "Running tests with LCOV coverage..."
-  cd "${APP_DIR}"
-  npm ci --silent > /dev/null 2>&1 || true
-  npx jest --coverage --coverageReporters=lcov text 2>&1 || warn "Some tests failed — coverage may be partial"
-  cd "${WORKSPACE}"
-
-  LCOV_PATH="${APP_DIR}/coverage/lcov.info"
-  if [ -f "${LCOV_PATH}" ]; then
-    ok "LCOV coverage report found ($(wc -c < "${LCOV_PATH}") bytes)"
-  else
-    warn "No LCOV report generated — SonarQube will see 0% coverage"
-    LCOV_PATH=""
-  fi
-
   SONAR_OK=false
-
-  # Build common SonarQube arguments
-  SONAR_COVERAGE_ARG=""
-  if [ -n "${LCOV_PATH}" ]; then
-    SONAR_COVERAGE_ARG="-Dsonar.javascript.lcov.reportPaths=${LCOV_PATH}"
-  fi
 
   if command -v sonar-scanner &>/dev/null; then
     log "Using installed sonar-scanner CLI..."
     sonar-scanner \
       -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
       -Dsonar.host.url="${SONAR_HOST_URL}" \
-      -Dsonar.login="${SONAR_TOKEN}" \
-      -Dsonar.sources=src \
-      -Dsonar.tests=tests \
-      -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/build/**,**/coverage/**,**/backend/**,**/seeds/**,**/scripts/**,**/.git/**" \
+      -Dsonar.token="${SONAR_TOKEN}" \
+      -Dsonar.sources=. \
+      -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/build/**,**/coverage/**,**/tests/**,**/seeds/**,**/scripts/**,**/.git/**" \
       -Dsonar.sourceEncoding=UTF-8 \
-      ${SONAR_COVERAGE_ARG} \
       2>&1 && SONAR_OK=true || SONAR_OK=false
   else
     log "Using Docker sonar-scanner-cli..."
@@ -194,11 +171,9 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
       sonarsource/sonar-scanner-cli:latest \
       -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
       -Dsonar.host.url="${SONAR_HOST_URL}" \
-      -Dsonar.login="${SONAR_TOKEN}" \
-      -Dsonar.sources=/usr/src/src \
-      -Dsonar.tests=/usr/src/tests \
-      -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/build/**,**/coverage/**,**/backend/**,**/.git/**" \
-      -Dsonar.javascript.lcov.reportPaths=/usr/src/coverage/lcov.info \
+      -Dsonar.token="${SONAR_TOKEN}" \
+      -Dsonar.sources=/usr/src \
+      -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/build/**,**/coverage/**" \
       -Dsonar.sourceEncoding=UTF-8 \
       2>&1 && SONAR_OK=true || SONAR_OK=false
   fi
