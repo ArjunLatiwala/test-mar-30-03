@@ -30,6 +30,15 @@ log()  { echo "[$(date '+%H:%M:%S')] $*"; }
 ok()   { echo "[$(date '+%H:%M:%S')] ✓ $*"; }
 warn() { echo "[$(date '+%H:%M:%S')] ⚠ WARNING: $*"; }
 fail() { echo "[$(date '+%H:%M:%S')] ✗ ERROR: $*"; }
+banner_fail() {
+  echo ""
+  echo "################################################################"
+  echo "#                                                              #"
+  echo "#   ✗ ERROR: $1 FAILED   #"
+  echo "#                                                              #"
+  echo "################################################################"
+  echo ""
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BANNER + VALIDATION
@@ -270,7 +279,7 @@ if [ "${SONAR_REACHABLE}" = "true" ]; then
       SONAR_RESULT="partial"
     fi
   else
-    warn "SonarQube scan failed"
+    banner_fail "SONARQUBE SCAN"
     SONAR_RESULT="failed"
   fi
 else
@@ -287,7 +296,7 @@ if npm test > /dev/null 2>&1; then
   ok "Unit tests passed"
   UNIT_RESULT="passed"
 else
-  warn "Unit tests failed"
+  banner_fail "UNIT TESTS"
   UNIT_RESULT="failed"
 fi
 
@@ -320,7 +329,7 @@ if [ "${APP_READY}" = "true" ]; then
       ok "Newman tests passed"
       NEWMAN_RESULT="passed"
     else
-      warn "Newman tests failed"
+      banner_fail "NEWMAN API TESTS"
       NEWMAN_RESULT="failed"
     fi
   else
