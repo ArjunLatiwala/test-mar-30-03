@@ -306,10 +306,10 @@ if [ "${APP_READY}" = "true" ]; then
     -v "${REPORTS_DIR}:/zap/wrk/:rw" \
     ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
     -t http://localhost:3000 \
-    -J zap-report.json || true
+    -x zap-report.xml || true
   
-  if [ -f "${REPORTS_DIR}/zap-report.json" ]; then
-    ZAP_SIZE=$(wc -c < "${REPORTS_DIR}/zap-report.json")
+  if [ -f "${REPORTS_DIR}/zap-report.xml" ]; then
+    ZAP_SIZE=$(wc -c < "${REPORTS_DIR}/zap-report.xml")
     if [ "${ZAP_SIZE}" -gt 100 ]; then
       ok "ZAP Scan completed successfully (${ZAP_SIZE} bytes)."
       ZAP_RESULT="completed"
@@ -375,7 +375,7 @@ do_import \
   "SonarQube" || true
 
 do_import \
-  "${REPORTS_DIR}/zap-report.json" \
+  "${REPORTS_DIR}/zap-report.xml" \
   "ZAP Scan" \
   "OWASP ZAP" || true
 
@@ -414,7 +414,7 @@ if [ "${DOJO_IMPORT_FAILED}" = "true" ]; then
     "note": "DefectDojo import failed. Raw reports are included in this artifact.",
     "raw_reports": {
       "sonarqube_report_bytes": ${SONAR_SIZE},
-      "zap_report_bytes": $(wc -c < "${REPORTS_DIR}/zap-report.json" 2>/dev/null || echo 0)
+      "zap_report_bytes": $(wc -c < "${REPORTS_DIR}/zap-report.xml" 2>/dev/null || echo 0)
     }
   }
 }
