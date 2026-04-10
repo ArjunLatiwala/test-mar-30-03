@@ -304,7 +304,7 @@ if [ "${APP_READY}" = "true" ]; then
   # Use || true so the script doesn't abort early if vulnerabilities are found
   docker run --rm --network=host \
     -v "${REPORTS_DIR}:/zap/wrk/:rw" \
-    owasp/zap2docker-stable zap-baseline.py \
+    ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
     -t http://localhost:3000 \
     -J zap-report.json || true
   
